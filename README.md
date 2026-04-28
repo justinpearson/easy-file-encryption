@@ -29,3 +29,7 @@ Click **Decrypt** and the original file downloads.
 ## Caveats
 
 The recipient is trusting whoever sent the HTML page that the embedded decryption code hasn't been tampered with. If that matters to you, diff the script against this repo's copy before running it. Browser memory may also retain decrypted bytes until the tab is closed.
+
+Doesn't work on mobile — tested on Safari on iOS, the download step fails.
+
+Email providers (Gmail in particular) may block or strip an attachment like `my-file.png.html`. Send the encrypted file via a link-share service, a chat app, or a USB stick instead.
