@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<title>File Encryption</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<style>
+			*{
+				box-sizing: border-box;
+				margin: 0;
+				padding: 0;
+			}
+
+			body{
+				font: 15px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+				color: #1f2328;
+				background: #f6f7f9;
+				min-height: 100vh;
+				display: grid;
+				place-items: center;
+				padding: 24px;
+			}
+
+			main{
+				background: #fff;
+				padding: 28px 32px;
+				border: 1px solid #e3e6eb;
+				border-radius: 8px;
+				width: 100%;
+				max-width: 460px;
+			}
+
+			h1{
+				font-size: 20px;
+				font-weight: 600;
+				margin-bottom: 4px;
+			}
+
+			.lede{
+				color: #5b6470;
+				font-size: 13px;
+				margin-bottom: 24px;
+			}
+
+			.field{
+				display: block;
+				margin-bottom: 16px;
+			}
+
+			.label{
+				display: block;
+				font-size: 13px;
+				color: #5b6470;
+				margin-bottom: 6px;
+			}
+
+			input[type=file],
+			input[type=password]{
+				width: 100%;
+				padding: 8px 10px;
+				border: 1px solid #d0d4da;
+				border-radius: 4px;
+				font: inherit;
+				background: #fff;
+			}
+
+			input[type=file]{
+				padding: 4px;
+			}
+
+			input[type=password]:focus{
+				outline: none;
+				border-color: #3b82f6;
+				box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+			}
+
+			button{
+				display: block;
+				width: 100%;
+				padding: 10px;
+				margin-top: 8px;
+				font: inherit;
+				font-weight: 600;
+				color: #fff;
+				background: #3b82f6;
+				border: none;
+				border-radius: 4px;
+				cursor: pointer;
+				transition: background 0.15s;
+			}
+
+			button:hover:not(:disabled){
+				background: #2563eb;
+			}
+
+			button:disabled{
+				background: #9ca3af;
+				cursor: not-allowed;
+			}
+
+			#status{
+				margin-top: 18px;
+				min-height: 22px;
+				font-size: 14px;
+				color: #5b6470;
+			}
+
+			#status.error{
+				color: #b91c1c;
+			}
+
+			.spinner{
+				display: inline-block;
+				width: 14px;
+				height: 14px;
+				border: 2px solid rgba(0, 0, 0, 0.15);
+				border-top-color: #3b82f6;
+				border-radius: 50%;
+				animation: spin 0.8s linear infinite;
+				vertical-align: -3px;
+				margin-right: 8px;
+			}
+
+			#download{
+				display: inline-block;
+				margin-top: 6px;
+				color: #3b82f6;
+				text-decoration: none;
+				font-weight: 600;
+				font-size: 14px;
+			}
+
+			#download:hover{
+				text-decoration: underline;
+			}
+
+			#download[hidden]{
+				display: none;
+			}
+
+			@keyframes spin{
+				to { transform: rotate(360deg); }
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<h1>File Encryption</h1>
+			<p class="lede">Encrypts a file into a self-decrypting HTML page. The recipient just needs a browser — no other software, no need to host this tool anywhere.</p>
+
+			<label class="field">
+				<span class="label">File</span>
+				<input type="file" id="file-input">
+			</label>
+
+			<label class="field">
+				<span class="label">Password</span>
+				<input type="password" id="password-input" autocomplete="off">
+			</label>
+
+			<button id="action" type="button">Encrypt</button>
+
+			<div id="status" role="status" aria-live="polite"></div>
+			<a id="download" hidden>Download file</a>
+		</main>
+
+		<script>
+			(function () {
+				'use strict';
+
+				const MIN_PASSWORD_LENGTH = 5;
+				const MAX_FILE_BYTES = 50 * 1024 * 1024;
+
+				const MAGIC = new Uint8Array([0x45, 0x4e, 0x43, 0x31]); // 'ENC1'
+				const SALT_BYTES = 16;
+				const IV_BYTES = 12;
+				const HEADER_BYTES = MAGIC.length + SALT_BYTES + IV_BYTES;
+				const PBKDF2_ITERATIONS = 600_000;
+
+				const fileInput = document.getElementById('file-input');
+				const passwordInput = document.getElementById('password-input');
+				const actionBtn = document.getElementById('action');
+				const statusEl = document.getElementById('status');
+				const downloadLink = document.getElementById('download');
+
+				let currentDownloadUrl = null;
+
+				function setStatus(text, isError) {
+					statusEl.textContent = text;
+					statusEl.classList.toggle('error', !!isError);
+				}
+
+				function showSpinner(text) {
+					statusEl.classList.remove('error');
+					statusEl.replaceChildren(
+						Object.assign(document.createElement('span'), { className: 'spinner' }),
+						document.createTextNode(text),
+					);
+				}
+
+				function setDownload(blob, filename) {
+					if (currentDownloadUrl) URL.revokeObjectURL(currentDownloadUrl);
+					currentDownloadUrl = URL.createObjectURL(blob);
+					downloadLink.href = currentDownloadUrl;
+					downloadLink.download = filename;
+					downloadLink.textContent = `Download again (${filename})`;
+					downloadLink.hidden = false;
+					downloadLink.click();
+				}
+
+				function clearDownload() {
+					if (currentDownloadUrl) {
+						URL.revokeObjectURL(currentDownloadUrl);
+						currentDownloadUrl = null;
+					}
+					downloadLink.hidden = true;
+				}
+
+				async function deriveKey(password, salt) {
+					const passwordKey = await crypto.subtle.importKey(
+						'raw',
+						new TextEncoder().encode(password),
+						{ name: 'PBKDF2' },
+						false,
+						['deriveKey'],
+					);
+					return crypto.subtle.deriveKey(
+						{ name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+						passwordKey,
+						{ name: 'AES-GCM', length: 256 },
+						false,
+						['encrypt'],
+					);
+				}
+
+				async function encryptBytes(plaintext, password) {
+					const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+					const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+					const key = await deriveKey(password, salt);
+					const ciphertext = new Uint8Array(
+						await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext),
+					);
+					const out = new Uint8Array(HEADER_BYTES + ciphertext.length);
+					out.set(MAGIC, 0);
+					out.set(salt, MAGIC.length);
+					out.set(iv, MAGIC.length + SALT_BYTES);
+					out.set(ciphertext, HEADER_BYTES);
+					return out;
+				}
+
+				// FileReader handles base64 encoding of large binary blobs without manual chunk loops.
+				function bytesToBase64(bytes) {
+					return new Promise((resolve, reject) => {
+						const reader = new FileReader();
+						reader.onload = () => resolve(reader.result.split(',', 2)[1]);
+						reader.onerror = () => reject(reader.error);
+						reader.readAsDataURL(new Blob([bytes]));
+					});
+				}
+
+				function buildSelfDecryptingHtml(payloadB64, originalFilename) {
+					return DECRYPTOR_TEMPLATE
+						.replace('__ORIGINAL_FILENAME__', JSON.stringify(originalFilename))
+						.replace('__PAYLOAD_B64__', JSON.stringify(payloadB64));
+				}
+
+				async function runEncrypt(file, password) {
+					const plaintext = await file.arrayBuffer();
+					const encrypted = await encryptBytes(plaintext, password);
+					const payloadB64 = await bytesToBase64(encrypted);
+					const html = buildSelfDecryptingHtml(payloadB64, file.name);
+					setDownload(new Blob([html], { type: 'text/html;charset=utf-8' }), file.name + '.html');
+					setStatus(`Encrypted into self-decrypting page (${(html.length / 1024 / 1024).toFixed(2)} MB).`);
+				}
+
+				actionBtn.addEventListener('click', async () => {
+					clearDownload();
+
+					const file = fileInput.files[0];
+					const password = passwordInput.value;
+
+					if (!file) {
+						setStatus('Please choose a file.', true);
+						return;
+					}
+					if (file.size > MAX_FILE_BYTES) {
+						setStatus(`File is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB; pick something smaller to avoid exhausting browser memory.`, true);
+						return;
+					}
+					if (password.length < MIN_PASSWORD_LENGTH) {
+						setStatus(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`, true);
+						return;
+					}
+
+					passwordInput.value = '';
+					actionBtn.disabled = true;
+					showSpinner('Encrypting…');
+
+					try {
+						await runEncrypt(file, password);
+					} catch (e) {
+						setStatus(`Unexpected error: ${e.message}`, true);
+					} finally {
+						actionBtn.disabled = false;
+					}
+				});
+
+				// The decryptor template — a complete, self-contained HTML page. Two placeholders
+				// (__ORIGINAL_FILENAME__ and __PAYLOAD_B64__) are substituted with JSON-stringified
+				// JS literals at encrypt time. Crypto helpers and format constants are duplicated
+				// from above by necessity: the output HTML must run standalone.
+				const DECRYPTOR_TEMPLATE = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Decrypt</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;color:#1f2328;background:#f6f7f9;min-height:100vh;display:grid;place-items:center;padding:24px}
+main{background:#fff;padding:28px 32px;border:1px solid #e3e6eb;border-radius:8px;width:100%;max-width:460px}
+h1{font-size:20px;font-weight:600;margin-bottom:4px}
+.lede{color:#5b6470;font-size:13px;margin-bottom:24px}
+.lede strong{color:#1f2328;font-weight:600;word-break:break-all}
+.field{display:block;margin-bottom:16px}
+.label{display:block;font-size:13px;color:#5b6470;margin-bottom:6px}
+input[type=password]{width:100%;padding:8px 10px;border:1px solid #d0d4da;border-radius:4px;font:inherit;background:#fff}
+input[type=password]:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.18)}
+button{display:block;width:100%;padding:10px;margin-top:8px;font:inherit;font-weight:600;color:#fff;background:#3b82f6;border:none;border-radius:4px;cursor:pointer;transition:background .15s}
+button:hover:not(:disabled){background:#2563eb}
+button:disabled{background:#9ca3af;cursor:not-allowed}
+#status{margin-top:18px;min-height:22px;font-size:14px;color:#5b6470}
+#status.error{color:#b91c1c}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(0,0,0,.15);border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-3px;margin-right:8px}
+#download{display:inline-block;margin-top:6px;color:#3b82f6;text-decoration:none;font-weight:600;font-size:14px}
+#download:hover{text-decoration:underline}
+#download[hidden]{display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<main>
+<h1>Decrypt file</h1>
+<p class="lede">This page contains an encrypted copy of <strong id="filename"></strong>. Enter the password to decrypt and download it.</p>
+<label class="field"><span class="label">Password</span><input type="password" id="password" autocomplete="off" autofocus></label>
+<button id="action" type="button">Decrypt</button>
+<div id="status" role="status" aria-live="polite"></div>
+<a id="download" hidden>Download</a>
+</main>
+<script>
+(function(){
+'use strict';
+const FILENAME=__ORIGINAL_FILENAME__;
+const B64=__PAYLOAD_B64__;
+const MAGIC=new Uint8Array([0x45,0x4e,0x43,0x31]);
+const SALT_BYTES=16,IV_BYTES=12,HEADER_BYTES=32,GCM_TAG_BYTES=16;
+const PBKDF2_ITERATIONS=600000;
+
+document.title='Decrypt '+FILENAME;
+document.getElementById('filename').textContent=FILENAME;
+
+const passwordEl=document.getElementById('password');
+const btn=document.getElementById('action');
+const statusEl=document.getElementById('status');
+const dl=document.getElementById('download');
+let url=null;
+
+function setStatus(t,err){statusEl.textContent=t;statusEl.classList.toggle('error',!!err)}
+function showSpinner(t){
+	statusEl.classList.remove('error');
+	statusEl.replaceChildren(Object.assign(document.createElement('span'),{className:'spinner'}),document.createTextNode(t));
+}
+function setDownload(blob,name){
+	if(url) URL.revokeObjectURL(url);
+	url=URL.createObjectURL(blob);
+	dl.href=url; dl.download=name;
+	dl.textContent='Download again ('+name+')';
+	dl.hidden=false;
+	dl.click();
+}
+function b64toBytes(b){
+	const bin=atob(b);
+	const out=new Uint8Array(bin.length);
+	for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
+	return out;
+}
+async function deriveKey(pw,salt){
+	const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),{name:'PBKDF2'},false,['deriveKey']);
+	return crypto.subtle.deriveKey(
+		{name:'PBKDF2',salt,iterations:PBKDF2_ITERATIONS,hash:'SHA-256'},
+		k,{name:'AES-GCM',length:256},false,['decrypt']);
+}
+async function decrypt(buf,pw){
+	if(buf.length<HEADER_BYTES+GCM_TAG_BYTES) throw new Error('not-encrypted');
+	for(let i=0;i<MAGIC.length;i++) if(buf[i]!==MAGIC[i]) throw new Error('not-encrypted');
+	const salt=buf.slice(MAGIC.length,MAGIC.length+SALT_BYTES);
+	const iv=buf.slice(MAGIC.length+SALT_BYTES,HEADER_BYTES);
+	const ct=buf.slice(HEADER_BYTES);
+	const key=await deriveKey(pw,salt);
+	return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv},key,ct));
+}
+
+passwordEl.addEventListener('keydown',(e)=>{ if(e.key==='Enter') btn.click(); });
+
+btn.addEventListener('click',async()=>{
+	const pw=passwordEl.value;
+	if(!pw){setStatus('Enter the password.',true);return}
+	btn.disabled=true; showSpinner('Decrypting…');
+	try{
+		const ct=b64toBytes(B64);
+		const pt=await decrypt(ct,pw);
+		setDownload(new Blob([pt],{type:'application/octet-stream'}),FILENAME);
+		setStatus('Decrypted.');
+		passwordEl.value='';
+	}catch(e){
+		setStatus(e.message==='not-encrypted'?'This file is corrupted.':'Invalid password.',true);
+	}finally{
+		btn.disabled=false;
+	}
+});
+})();
+<\/script>
+</body>
+</html>`;
+			})();
+		</script>
+	</body>
+</html>
