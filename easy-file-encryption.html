@@ -74,6 +74,19 @@
 				box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
 			}
 
+			#mode{
+				font-size: 13px;
+				color: #5b6470;
+				margin: -8px 0 16px;
+				min-height: 20px;
+				word-break: break-all;
+			}
+
+			#mode strong{
+				color: #1f2328;
+				font-weight: 600;
+			}
+
 			button{
 				display: block;
 				width: 100%;
@@ -98,11 +111,24 @@
 				cursor: not-allowed;
 			}
 
-			#status{
+			progress{
+				display: block;
+				width: 100%;
+				height: 8px;
 				margin-top: 18px;
+				accent-color: #3b82f6;
+			}
+
+			progress[hidden]{
+				display: none;
+			}
+
+			#status{
+				margin-top: 12px;
 				min-height: 22px;
 				font-size: 14px;
 				color: #5b6470;
+				word-break: break-word;
 			}
 
 			#status.error{
@@ -146,43 +172,237 @@
 	<body>
 		<main>
 			<h1>File Encryption</h1>
-			<p class="lede">Encrypts a file into a self-decrypting HTML page. The recipient just needs a browser — no other software, no need to host this tool anywhere.</p>
+			<p class="lede">Encrypts or decrypts a file of any size, entirely inside your browser. Choose a file: an encrypted <strong>.enc</strong> file will be decrypted, anything else will be encrypted.</p>
 
 			<label class="field">
 				<span class="label">File</span>
 				<input type="file" id="file-input">
 			</label>
 
+			<div id="mode" aria-live="polite"></div>
+
 			<label class="field">
 				<span class="label">Password</span>
 				<input type="password" id="password-input" autocomplete="off">
 			</label>
 
-			<button id="action" type="button">Encrypt</button>
+			<button id="action" type="button" disabled>Choose a file</button>
 
+			<progress id="progress" max="1000" value="0" hidden></progress>
 			<div id="status" role="status" aria-live="polite"></div>
 			<a id="download" hidden>Download file</a>
 		</main>
+
+		<!--
+			The crypto core. It has no DOM dependencies so tests/core.test.mjs can lift it out of
+			this file and run it under Node. Keep it that way: no document, window, or UI code here.
+		-->
+		<script id="core">
+			(function () {
+				'use strict';
+
+				const MAGIC = new Uint8Array([0x45, 0x4e, 0x43, 0x32]); // 'ENC2'
+				const SALT_BYTES = 16;
+				const NONCE_PREFIX_BYTES = 8;
+				const NONCE_BYTES = 12;
+				const GCM_TAG_BYTES = 16;
+				// magic + salt + nonce prefix + iterations (u32) + chunk size (u32) + filename length (u16)
+				const FIXED_HEADER_BYTES = MAGIC.length + SALT_BYTES + NONCE_PREFIX_BYTES + 4 + 4 + 2;
+				const DEFAULT_PBKDF2_ITERATIONS = 600_000;
+				const DEFAULT_CHUNK_BYTES = 8 * 1024 * 1024;
+				const MAX_FILENAME_BYTES = 0xffff;
+				// Sanity caps on values read from an untrusted header, so a damaged or hostile
+				// file cannot make the browser allocate gigabytes or spin on key derivation.
+				const MAX_CHUNK_BYTES = 256 * 1024 * 1024;
+				const MAX_PBKDF2_ITERATIONS = 10_000_000;
+
+				function fail(code, message) {
+					const e = new Error(message);
+					e.code = code;
+					return e;
+				}
+
+				function u32(n) {
+					const b = new Uint8Array(4);
+					new DataView(b.buffer).setUint32(0, n);
+					return b;
+				}
+
+				function view(bytes) {
+					return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+				}
+
+				async function deriveKey(password, salt, iterations, usage) {
+					const passwordKey = await crypto.subtle.importKey(
+						'raw',
+						new TextEncoder().encode(password),
+						{ name: 'PBKDF2' },
+						false,
+						['deriveKey'],
+					);
+					return crypto.subtle.deriveKey(
+						{ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+						passwordKey,
+						{ name: 'AES-GCM', length: 256 },
+						false,
+						[usage],
+					);
+				}
+
+				// Every chunk gets a distinct 96-bit nonce: 8 random bytes per file, then the
+				// chunk index. The key is also unique per file (fresh salt), so nonces never repeat.
+				function nonceFor(prefix, index) {
+					const n = new Uint8Array(NONCE_BYTES);
+					n.set(prefix, 0);
+					n.set(u32(index), NONCE_PREFIX_BYTES);
+					return n;
+				}
+
+				// Authenticated-but-unencrypted data for each chunk: the whole header (so filename,
+				// chunk size and KDF settings cannot be altered), the chunk index (so chunks cannot
+				// be reordered or dropped) and a last-chunk flag (so the file cannot be truncated).
+				function aadFor(header, index, isLast) {
+					const a = new Uint8Array(header.length + 5);
+					a.set(header, 0);
+					a.set(u32(index), header.length);
+					a[header.length + 4] = isLast ? 1 : 0;
+					return a;
+				}
+
+				function buildHeader(salt, prefix, iterations, chunkBytes, nameBytes) {
+					const h = new Uint8Array(FIXED_HEADER_BYTES + nameBytes.length);
+					const dv = view(h);
+					let off = 0;
+					h.set(MAGIC, off); off += MAGIC.length;
+					h.set(salt, off); off += SALT_BYTES;
+					h.set(prefix, off); off += NONCE_PREFIX_BYTES;
+					dv.setUint32(off, iterations); off += 4;
+					dv.setUint32(off, chunkBytes); off += 4;
+					dv.setUint16(off, nameBytes.length); off += 2;
+					h.set(nameBytes, off);
+					return h;
+				}
+
+				async function isEncrypted(file) {
+					if (file.size < MAGIC.length) return false;
+					const head = new Uint8Array(await file.slice(0, MAGIC.length).arrayBuffer());
+					return MAGIC.every((b, i) => head[i] === b);
+				}
+
+				async function parseHeader(file) {
+					if (!(await isEncrypted(file))) throw fail('not-encrypted', 'This file is not encrypted.');
+					if (file.size < FIXED_HEADER_BYTES) throw fail('corrupt', 'The file header is damaged.');
+					const fixed = new Uint8Array(await file.slice(0, FIXED_HEADER_BYTES).arrayBuffer());
+					const dv = view(fixed);
+					let off = MAGIC.length;
+					const salt = fixed.slice(off, off + SALT_BYTES); off += SALT_BYTES;
+					const prefix = fixed.slice(off, off + NONCE_PREFIX_BYTES); off += NONCE_PREFIX_BYTES;
+					const iterations = dv.getUint32(off); off += 4;
+					const chunkBytes = dv.getUint32(off); off += 4;
+					const nameLength = dv.getUint16(off); off += 2;
+					if (iterations === 0 || iterations > MAX_PBKDF2_ITERATIONS) throw fail('corrupt', 'The file header is damaged.');
+					if (chunkBytes === 0 || chunkBytes > MAX_CHUNK_BYTES) throw fail('corrupt', 'The file header is damaged.');
+					const headerBytes = FIXED_HEADER_BYTES + nameLength;
+					if (file.size < headerBytes + GCM_TAG_BYTES) throw fail('corrupt', 'The file header is damaged.');
+					const header = new Uint8Array(await file.slice(0, headerBytes).arrayBuffer());
+					const name = new TextDecoder().decode(header.subarray(FIXED_HEADER_BYTES));
+					return { header, headerBytes, salt, prefix, iterations, chunkBytes, name };
+				}
+
+				// Encrypts `file` (a Blob/File) chunk by chunk, passing each output piece to
+				// sink.write(Uint8Array) in order. Only one chunk is in memory at a time.
+				async function encrypt(file, password, sink, opts = {}) {
+					const chunkBytes = opts.chunkBytes || DEFAULT_CHUNK_BYTES;
+					const iterations = opts.iterations || DEFAULT_PBKDF2_ITERATIONS;
+					const onProgress = opts.onProgress || (() => {});
+					const nameBytes = new TextEncoder().encode(file.name || '');
+					if (nameBytes.length > MAX_FILENAME_BYTES) throw fail('bad-input', 'The filename is too long.');
+
+					const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+					const prefix = crypto.getRandomValues(new Uint8Array(NONCE_PREFIX_BYTES));
+					const header = buildHeader(salt, prefix, iterations, chunkBytes, nameBytes);
+					const key = await deriveKey(password, salt, iterations, 'encrypt');
+
+					await sink.write(header);
+					const total = file.size;
+					const chunkCount = Math.max(1, Math.ceil(total / chunkBytes));
+					for (let i = 0; i < chunkCount; i++) {
+						const start = i * chunkBytes;
+						const end = Math.min(start + chunkBytes, total);
+						const isLast = i === chunkCount - 1;
+						const plain = await file.slice(start, end).arrayBuffer();
+						const ct = await crypto.subtle.encrypt(
+							{ name: 'AES-GCM', iv: nonceFor(prefix, i), additionalData: aadFor(header, i, isLast) },
+							key,
+							plain,
+						);
+						await sink.write(new Uint8Array(ct));
+						onProgress(end, total);
+					}
+				}
+
+				// Decrypts `file` chunk by chunk into sink.write(Uint8Array). Throws with
+				// e.code === 'auth' on a wrong password or any tampering; nothing is written
+				// to the sink in that case unless the damage is past the first chunk.
+				async function decrypt(file, password, sink, opts = {}) {
+					const onProgress = opts.onProgress || (() => {});
+					const h = await parseHeader(file);
+					const key = await deriveKey(password, h.salt, h.iterations, 'decrypt');
+
+					const total = file.size;
+					const step = h.chunkBytes + GCM_TAG_BYTES;
+					let offset = h.headerBytes;
+					for (let i = 0; ; i++) {
+						const end = Math.min(offset + step, total);
+						const isLast = end === total;
+						const ct = await file.slice(offset, end).arrayBuffer();
+						if (ct.byteLength < GCM_TAG_BYTES) throw fail('corrupt', 'The file is damaged.');
+						let plain;
+						try {
+							plain = await crypto.subtle.decrypt(
+								{ name: 'AES-GCM', iv: nonceFor(h.prefix, i), additionalData: aadFor(h.header, i, isLast) },
+								key,
+								ct,
+							);
+						} catch (e) {
+							throw fail('auth', 'Wrong password, or the file has been damaged.');
+						}
+						await sink.write(new Uint8Array(plain));
+						onProgress(end, total);
+						if (isLast) break;
+						offset = end;
+					}
+				}
+
+				globalThis.EFE = {
+					encrypt,
+					decrypt,
+					isEncrypted,
+					parseHeader,
+					DEFAULT_CHUNK_BYTES,
+					DEFAULT_PBKDF2_ITERATIONS,
+				};
+			})();
+		</script>
 
 		<script>
 			(function () {
 				'use strict';
 
 				const MIN_PASSWORD_LENGTH = 5;
-				const MAX_FILE_BYTES = 50 * 1024 * 1024;
-
-				const MAGIC = new Uint8Array([0x45, 0x4e, 0x43, 0x31]); // 'ENC1'
-				const SALT_BYTES = 16;
-				const IV_BYTES = 12;
-				const HEADER_BYTES = MAGIC.length + SALT_BYTES + IV_BYTES;
-				const PBKDF2_ITERATIONS = 600_000;
+				const ENC_SUFFIX = '.enc';
+				const { encrypt, decrypt, isEncrypted, parseHeader } = globalThis.EFE;
 
 				const fileInput = document.getElementById('file-input');
 				const passwordInput = document.getElementById('password-input');
 				const actionBtn = document.getElementById('action');
+				const modeEl = document.getElementById('mode');
+				const progressEl = document.getElementById('progress');
 				const statusEl = document.getElementById('status');
 				const downloadLink = document.getElementById('download');
 
+				let mode = null;        // 'encrypt' | 'decrypt' | null
+				let outputName = null;
 				let currentDownloadUrl = null;
 
 				function setStatus(text, isError) {
@@ -196,6 +416,17 @@
 						Object.assign(document.createElement('span'), { className: 'spinner' }),
 						document.createTextNode(text),
 					);
+				}
+
+				function setMode(text, strong) {
+					modeEl.replaceChildren(
+						document.createTextNode(text),
+						Object.assign(document.createElement('strong'), { textContent: strong || '' }),
+					);
+				}
+
+				function formatMB(bytes) {
+					return (bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 2 : 0) + ' MB';
 				}
 
 				function setDownload(blob, filename) {
@@ -216,62 +447,71 @@
 					downloadLink.hidden = true;
 				}
 
-				async function deriveKey(password, salt) {
-					const passwordKey = await crypto.subtle.importKey(
-						'raw',
-						new TextEncoder().encode(password),
-						{ name: 'PBKDF2' },
-						false,
-						['deriveKey'],
-					);
-					return crypto.subtle.deriveKey(
-						{ name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
-						passwordKey,
-						{ name: 'AES-GCM', length: 256 },
-						false,
-						['encrypt'],
-					);
+				// Where the output goes. Chrome and Edge offer showSaveFilePicker, which streams
+				// straight to a file on disk so even multi-gigabyte outputs never sit in memory.
+				// Other browsers get the output assembled as a Blob and handed to a download link.
+				async function openSink(suggestedName) {
+					if (typeof window.showSaveFilePicker === 'function') {
+						let handle;
+						try {
+							handle = await window.showSaveFilePicker({ suggestedName });
+						} catch (e) {
+							if (e.name === 'AbortError') throw e;
+							handle = null; // Picker unavailable here; fall through to the Blob path.
+						}
+						if (handle) {
+							const writable = await handle.createWritable();
+							return {
+								description: `Saved as ${handle.name}.`,
+								write: (bytes) => writable.write(bytes),
+								close: () => writable.close(),
+								abort: () => writable.abort().catch(() => {}),
+							};
+						}
+					}
+					const parts = [];
+					return {
+						description: `Downloaded as ${suggestedName}.`,
+						write: (bytes) => { parts.push(new Blob([bytes])); },
+						close: () => { setDownload(new Blob(parts), suggestedName); },
+						abort: () => { parts.length = 0; },
+					};
 				}
 
-				async function encryptBytes(plaintext, password) {
-					const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
-					const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
-					const key = await deriveKey(password, salt);
-					const ciphertext = new Uint8Array(
-						await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext),
-					);
-					const out = new Uint8Array(HEADER_BYTES + ciphertext.length);
-					out.set(MAGIC, 0);
-					out.set(salt, MAGIC.length);
-					out.set(iv, MAGIC.length + SALT_BYTES);
-					out.set(ciphertext, HEADER_BYTES);
-					return out;
+				function stripEncSuffix(name) {
+					return name.toLowerCase().endsWith(ENC_SUFFIX) ? name.slice(0, -ENC_SUFFIX.length) : 'decrypted-' + name;
 				}
 
-				// FileReader handles base64 encoding of large binary blobs without manual chunk loops.
-				function bytesToBase64(bytes) {
-					return new Promise((resolve, reject) => {
-						const reader = new FileReader();
-						reader.onload = () => resolve(reader.result.split(',', 2)[1]);
-						reader.onerror = () => reject(reader.error);
-						reader.readAsDataURL(new Blob([bytes]));
-					});
-				}
+				fileInput.addEventListener('change', async () => {
+					clearDownload();
+					setStatus('');
+					mode = null;
+					outputName = null;
+					actionBtn.disabled = true;
+					actionBtn.textContent = 'Choose a file';
+					setMode('');
 
-				function buildSelfDecryptingHtml(payloadB64, originalFilename) {
-					return DECRYPTOR_TEMPLATE
-						.replace('__ORIGINAL_FILENAME__', JSON.stringify(originalFilename))
-						.replace('__PAYLOAD_B64__', JSON.stringify(payloadB64));
-				}
+					const file = fileInput.files[0];
+					if (!file) return;
 
-				async function runEncrypt(file, password) {
-					const plaintext = await file.arrayBuffer();
-					const encrypted = await encryptBytes(plaintext, password);
-					const payloadB64 = await bytesToBase64(encrypted);
-					const html = buildSelfDecryptingHtml(payloadB64, file.name);
-					setDownload(new Blob([html], { type: 'text/html;charset=utf-8' }), file.name + '.html');
-					setStatus(`Encrypted into self-decrypting page (${(html.length / 1024 / 1024).toFixed(2)} MB).`);
-				}
+					try {
+						if (await isEncrypted(file)) {
+							const header = await parseHeader(file);
+							mode = 'decrypt';
+							outputName = header.name || stripEncSuffix(file.name);
+							setMode('Encrypted file. Decrypting will produce ', outputName);
+							actionBtn.textContent = 'Decrypt';
+						} else {
+							mode = 'encrypt';
+							outputName = file.name + ENC_SUFFIX;
+							setMode(`${formatMB(file.size)}. Encrypting will produce `, outputName);
+							actionBtn.textContent = 'Encrypt';
+						}
+						actionBtn.disabled = false;
+					} catch (e) {
+						setStatus(e.code === 'corrupt' ? 'This file is encrypted, but its header is damaged.' : `Could not read the file: ${e.message}`, true);
+					}
+				});
 
 				actionBtn.addEventListener('click', async () => {
 					clearDownload();
@@ -279,149 +519,60 @@
 					const file = fileInput.files[0];
 					const password = passwordInput.value;
 
-					if (!file) {
+					if (!file || !mode) {
 						setStatus('Please choose a file.', true);
 						return;
 					}
-					if (file.size > MAX_FILE_BYTES) {
-						setStatus(`File is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB; pick something smaller to avoid exhausting browser memory.`, true);
+					if (mode === 'encrypt' && password.length < MIN_PASSWORD_LENGTH) {
+						setStatus(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`, true);
 						return;
 					}
-					if (password.length < MIN_PASSWORD_LENGTH) {
-						setStatus(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`, true);
+					if (mode === 'decrypt' && !password) {
+						setStatus('Enter the password.', true);
+						return;
+					}
+
+					// The save dialog must open while the click is still a fresh user gesture,
+					// so it comes before any slow work.
+					let sink;
+					try {
+						sink = await openSink(outputName);
+					} catch (e) {
+						setStatus(e.name === 'AbortError' ? 'Cancelled.' : `Could not open a place to save the output: ${e.message}`, e.name !== 'AbortError');
 						return;
 					}
 
 					passwordInput.value = '';
 					actionBtn.disabled = true;
-					showSpinner('Encrypting…');
+					fileInput.disabled = true;
+					progressEl.value = 0;
+					progressEl.hidden = false;
+					const verb = mode === 'encrypt' ? 'Encrypting' : 'Decrypting';
+					showSpinner(`${verb}…`);
+
+					const onProgress = (done, total) => {
+						progressEl.value = total ? Math.round((done / total) * 1000) : 1000;
+						showSpinner(`${verb}… ${formatMB(done)} of ${formatMB(total)}`);
+					};
 
 					try {
-						await runEncrypt(file, password);
+						if (mode === 'encrypt') await encrypt(file, password, sink, { onProgress });
+						else await decrypt(file, password, sink, { onProgress });
+						await sink.close();
+						setStatus(`${mode === 'encrypt' ? 'Encrypted' : 'Decrypted'}. ${sink.description}`);
 					} catch (e) {
-						setStatus(`Unexpected error: ${e.message}`, true);
+						await sink.abort();
+						setStatus(e.code ? e.message : `Unexpected error: ${e.message}`, true);
 					} finally {
+						progressEl.hidden = true;
 						actionBtn.disabled = false;
+						fileInput.disabled = false;
 					}
 				});
 
-				// The decryptor template — a complete, self-contained HTML page. Two placeholders
-				// (__ORIGINAL_FILENAME__ and __PAYLOAD_B64__) are substituted with JSON-stringified
-				// JS literals at encrypt time. Crypto helpers and format constants are duplicated
-				// from above by necessity: the output HTML must run standalone.
-				const DECRYPTOR_TEMPLATE = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Decrypt</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;color:#1f2328;background:#f6f7f9;min-height:100vh;display:grid;place-items:center;padding:24px}
-main{background:#fff;padding:28px 32px;border:1px solid #e3e6eb;border-radius:8px;width:100%;max-width:460px}
-h1{font-size:20px;font-weight:600;margin-bottom:4px}
-.lede{color:#5b6470;font-size:13px;margin-bottom:24px}
-.lede strong{color:#1f2328;font-weight:600;word-break:break-all}
-.field{display:block;margin-bottom:16px}
-.label{display:block;font-size:13px;color:#5b6470;margin-bottom:6px}
-input[type=password]{width:100%;padding:8px 10px;border:1px solid #d0d4da;border-radius:4px;font:inherit;background:#fff}
-input[type=password]:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.18)}
-button{display:block;width:100%;padding:10px;margin-top:8px;font:inherit;font-weight:600;color:#fff;background:#3b82f6;border:none;border-radius:4px;cursor:pointer;transition:background .15s}
-button:hover:not(:disabled){background:#2563eb}
-button:disabled{background:#9ca3af;cursor:not-allowed}
-#status{margin-top:18px;min-height:22px;font-size:14px;color:#5b6470}
-#status.error{color:#b91c1c}
-.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(0,0,0,.15);border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-3px;margin-right:8px}
-#download{display:inline-block;margin-top:6px;color:#3b82f6;text-decoration:none;font-weight:600;font-size:14px}
-#download:hover{text-decoration:underline}
-#download[hidden]{display:none}
-@keyframes spin{to{transform:rotate(360deg)}}
-</style>
-</head>
-<body>
-<main>
-<h1>Decrypt file</h1>
-<p class="lede">This page contains an encrypted copy of <strong id="filename"></strong>. Enter the password to decrypt and download it.</p>
-<label class="field"><span class="label">Password</span><input type="password" id="password" autocomplete="off" autofocus></label>
-<button id="action" type="button">Decrypt</button>
-<div id="status" role="status" aria-live="polite"></div>
-<a id="download" hidden>Download</a>
-</main>
-<script>
-(function(){
-'use strict';
-const FILENAME=__ORIGINAL_FILENAME__;
-const B64=__PAYLOAD_B64__;
-const MAGIC=new Uint8Array([0x45,0x4e,0x43,0x31]);
-const SALT_BYTES=16,IV_BYTES=12,HEADER_BYTES=32,GCM_TAG_BYTES=16;
-const PBKDF2_ITERATIONS=600000;
-
-document.title='Decrypt '+FILENAME;
-document.getElementById('filename').textContent=FILENAME;
-
-const passwordEl=document.getElementById('password');
-const btn=document.getElementById('action');
-const statusEl=document.getElementById('status');
-const dl=document.getElementById('download');
-let url=null;
-
-function setStatus(t,err){statusEl.textContent=t;statusEl.classList.toggle('error',!!err)}
-function showSpinner(t){
-	statusEl.classList.remove('error');
-	statusEl.replaceChildren(Object.assign(document.createElement('span'),{className:'spinner'}),document.createTextNode(t));
-}
-function setDownload(blob,name){
-	if(url) URL.revokeObjectURL(url);
-	url=URL.createObjectURL(blob);
-	dl.href=url; dl.download=name;
-	dl.textContent='Download again ('+name+')';
-	dl.hidden=false;
-	dl.click();
-}
-function b64toBytes(b){
-	const bin=atob(b);
-	const out=new Uint8Array(bin.length);
-	for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
-	return out;
-}
-async function deriveKey(pw,salt){
-	const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),{name:'PBKDF2'},false,['deriveKey']);
-	return crypto.subtle.deriveKey(
-		{name:'PBKDF2',salt,iterations:PBKDF2_ITERATIONS,hash:'SHA-256'},
-		k,{name:'AES-GCM',length:256},false,['decrypt']);
-}
-async function decrypt(buf,pw){
-	if(buf.length<HEADER_BYTES+GCM_TAG_BYTES) throw new Error('not-encrypted');
-	for(let i=0;i<MAGIC.length;i++) if(buf[i]!==MAGIC[i]) throw new Error('not-encrypted');
-	const salt=buf.slice(MAGIC.length,MAGIC.length+SALT_BYTES);
-	const iv=buf.slice(MAGIC.length+SALT_BYTES,HEADER_BYTES);
-	const ct=buf.slice(HEADER_BYTES);
-	const key=await deriveKey(pw,salt);
-	return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv},key,ct));
-}
-
-passwordEl.addEventListener('keydown',(e)=>{ if(e.key==='Enter') btn.click(); });
-
-btn.addEventListener('click',async()=>{
-	const pw=passwordEl.value;
-	if(!pw){setStatus('Enter the password.',true);return}
-	btn.disabled=true; showSpinner('Decrypting…');
-	try{
-		const ct=b64toBytes(B64);
-		const pt=await decrypt(ct,pw);
-		setDownload(new Blob([pt],{type:'application/octet-stream'}),FILENAME);
-		setStatus('Decrypted.');
-		passwordEl.value='';
-	}catch(e){
-		setStatus(e.message==='not-encrypted'?'This file is corrupted.':'Invalid password.',true);
-	}finally{
-		btn.disabled=false;
-	}
-});
-})();
-<\/script>
-</body>
-</html>`;
+				passwordInput.addEventListener('keydown', (e) => {
+					if (e.key === 'Enter' && !actionBtn.disabled) actionBtn.click();
+				});
 			})();
 		</script>
 	</body>

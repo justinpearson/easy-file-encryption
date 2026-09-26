@@ -4,36 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-A single static HTML file, `easy-file-encryption.html`, that encrypts a user-selected file in the browser using the Web Crypto API and emits a self-contained, self-decrypting HTML page as the output. The recipient opens the output HTML in any browser, types the password, and gets the original file back. There is no server, no build step, no package manager, and no dependencies.
+A single static HTML file, `easy-file-encryption.html`, that encrypts or decrypts a user-selected file in the browser using the Web Crypto API. Encrypting produces a binary `<name>.enc` file; decrypting one of those restores the original. The same page does both, choosing the mode by sniffing the chosen file's magic bytes. There is no server, no build step, no package manager, and no dependencies.
 
 ## Running and testing
 
-Open `easy-file-encryption.html` directly in a browser (e.g. `open easy-file-encryption.html` on macOS). All crypto runs client-side via `window.crypto.subtle`, which requires either `file://`, `localhost`, or HTTPS — `crypto.subtle` is unavailable on plain `http://` origins.
+Open `easy-file-encryption.html` directly in a browser (e.g. `open easy-file-encryption.html` on macOS). All crypto runs client-side via `window.crypto.subtle`, which requires either `file://`, `localhost`, or HTTPS.
 
-There is no test suite, linter, or CI configured. To verify a change end-to-end: encrypt a file, open the produced `*.html` output, decrypt with the same password, and confirm the bytes match the original (`shasum` or `cmp`).
-
-## Architecture: the two-program structure inside one file
-
-The file contains **two programs** that must stay in sync:
-
-1. **The encryptor** (the outer IIFE in `easy-file-encryption.html`) — runs when a user opens this file. Reads a file + password, derives a key, encrypts, and assembles an output HTML page.
-2. **The decryptor template** — a complete standalone HTML document held as a JS template string in the constant `DECRYPTOR_TEMPLATE` near the bottom of the script. It contains its own `<style>`, `<body>`, and `<script>`. The encryptor produces output by `JSON.stringify`-ing the original filename and base64 payload into the placeholders `__ORIGINAL_FILENAME__` and `__PAYLOAD_B64__` inside this template.
-
-Because the decryptor must run standalone in the recipient's browser with no shared scope, the format constants (`MAGIC`, `SALT_BYTES`, `IV_BYTES`, `HEADER_BYTES`, `PBKDF2_ITERATIONS`) and the `deriveKey` helper are **intentionally duplicated** between the two programs. Any change to crypto parameters, header layout, or KDF settings must be made in **both** copies, or previously-encrypted files will fail to decrypt. The duplication is called out in a comment above `DECRYPTOR_TEMPLATE`.
-
-## Wire format
-
-Output payload bytes (before base64 encoding into the HTML):
+Unit tests for the crypto core run under Node (v20+) with nothing installed:
 
 ```
-[ MAGIC 'ENC1' (4B) ][ salt (16B) ][ IV (12B) ][ AES-256-GCM ciphertext + 16B auth tag ]
+node --test tests/core.test.mjs
 ```
 
-`HEADER_BYTES = 32`. The decryptor's "not-encrypted" check verifies the magic and a minimum length of `HEADER_BYTES + GCM_TAG_BYTES`. AES-GCM authentication failure (wrong password or tampered ciphertext) surfaces as "Invalid password." in the UI — the two cases are not distinguished by design.
+Note that `node --test tests/` (a bare directory) does not work on current Node; pass the file or a glob.
+
+`tests/e2e.mjs` round-trips a file of any size through the page in a real browser and checks the bytes. It needs a Playwright package on disk, located via `PLAYWRIGHT_DIR`; the header comment explains the flags. Use it after any change to the UI script or the sink logic, since the unit tests do not cover those.
+
+## Architecture: two scripts in one file
+
+1. **`<script id="core">`** — the crypto core, an IIFE that assigns `globalThis.EFE = { encrypt, decrypt, isEncrypted, parseHeader, ... }`. It touches no DOM. `tests/core.test.mjs` extracts it from the HTML with a regex on that `id` and runs it under `vm`, so keep it free of `window` and `document` references and keep the `id` attribute intact.
+2. **The UI script** — the second `<script>`, which wires the file input, password field, button, progress bar and status line to the core. It also owns the *sink*: where output bytes go. `openSink()` prefers `showSaveFilePicker` (Chrome/Edge), which streams to disk, and falls back to collecting `Blob` parts for a download link (Firefox/Safari).
+
+The core's `encrypt(file, password, sink, opts)` and `decrypt(file, password, sink, opts)` take any Blob-like input with `.slice().arrayBuffer()` and any sink with `write(Uint8Array)`. Options: `chunkBytes`, `iterations`, `onProgress(done, total)`.
+
+## Wire format (`ENC2`)
+
+All integers big-endian.
+
+```
+[ MAGIC 'ENC2' (4B) ][ salt (16B) ][ nonce prefix (8B) ][ PBKDF2 iterations (u32) ]
+[ chunk size (u32) ][ filename length (u16) ][ filename UTF-8 (n B) ]
+then, for each chunk i:  [ AES-256-GCM ciphertext (chunk size B, last chunk shorter) + 16B tag ]
+```
+
+- Chunk `i` uses nonce `prefix || u32(i)` and additional authenticated data `header || u32(i) || u8(isLast)`. This binds the header (including filename and KDF parameters), detects reordered or dropped chunks, and detects truncation at a chunk boundary.
+- An empty file encrypts to the header plus one 16-byte tag.
+- The decryptor reads `chunk size + 16` bytes at a time until end of file. A wrong password and a tampered file both surface as `e.code === 'auth'`; they are not distinguished by design.
+- `parseHeader` rejects chunk sizes over 256 MiB and iteration counts over 10 million as `corrupt`, so a hostile header cannot make the browser allocate or spin.
+
+Any change to the header layout, nonce derivation or AAD must bump the magic to a new value; files written under `ENC2` must keep decrypting.
 
 ## Constraints worth knowing before changing things
 
-- `MAX_FILE_BYTES = 50 MB`. Encryption holds the plaintext, ciphertext, and base64-encoded payload in memory simultaneously, and the output HTML is roughly 1.33× the input size. Raising this cap risks OOM on the recipient side too.
-- `PBKDF2_ITERATIONS = 600_000` matches OWASP's PBKDF2-SHA256 guidance. Lowering it weakens every previously-produced file's resistance to offline attack; raising it slows decryption noticeably on low-end devices.
+- There is no input size cap. Memory use is one chunk (8 MiB) plus whatever the sink holds. The Blob fallback sink holds the whole output in browser Blob storage, which in testing failed somewhere between 300 MB and 600 MB in headless Chrome; the streaming sink has no such limit.
+- `showSaveFilePicker` must be called while the click is still a fresh user gesture, so `openSink()` runs before key derivation. On a non-abort error from the picker the UI silently falls back to the Blob sink.
+- On failure the UI calls `sink.abort()`. For the streaming sink that discards the partially written file, since `FileSystemWritableFileStream` only commits on `close()`.
+- `PBKDF2_ITERATIONS = 600_000` matches OWASP guidance. The count is stored in the header, so it can be raised for new files without breaking old ones.
 - `MIN_PASSWORD_LENGTH = 5` is a UI sanity check, not a security policy.
-- Base64 encoding uses `FileReader.readAsDataURL` to avoid manually chunking large `Uint8Array`s through `btoa`/`String.fromCharCode` (which blows the call-stack limit on big inputs). The decryptor uses the simple `atob` + loop because it only runs on already-base64 data already living in JS memory.
+- Base64 was removed from the design entirely; the old data-URL trick capped files at V8's maximum string length (about 300 MB of input) and failed silently past it.
