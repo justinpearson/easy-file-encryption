@@ -21,7 +21,7 @@ Send the `.enc` file plus a copy of `easy-file-encryption.html` to the recipient
 Encryption and decryption read and write one 8 MiB chunk at a time, so the browser's memory use stays small regardless of file size. Where the output goes does depend on the browser:
 
 - **Chrome and Edge** stream the output to a file through the Save dialog. A 900 MB file round-trips in about 15 seconds each way and never sits in memory.
-- **Firefox and Safari** have no streaming save, so the output is collected as a Blob and handed to a download link. This works for files of a few hundred MB. In testing, the same download-link path in headless Chrome succeeded at 300 MB and failed at 600 MB, so for larger files either use Chrome or Edge, or keep each encrypted file under a few hundred MB.
+- **Firefox and Safari** have no streaming save, so the output is collected as a Blob and handed to a download link. In testing with Playwright's Firefox 156 and WebKit 26.6 builds, files of 300, 600 and 900 MB all round-tripped in a few seconds. (The same download-link path in headless Chrome for Testing fails above 300 MB, but real Chrome takes the streaming path, so that does not affect normal use.) Files of several GB are still better handled in Chrome or Edge, where nothing is held in memory.
 
 Mobile browsers are not supported: the download step fails on iOS Safari.
 

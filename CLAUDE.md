@@ -46,7 +46,7 @@ Any change to the header layout, nonce derivation or AAD must bump the magic to 
 
 ## Constraints worth knowing before changing things
 
-- There is no input size cap. Memory use is one chunk (8 MiB) plus whatever the sink holds. The Blob fallback sink holds the whole output in browser Blob storage, which in testing failed somewhere between 300 MB and 600 MB in headless Chrome; the streaming sink has no such limit.
+- There is no input size cap. Memory use is one chunk (8 MiB) plus whatever the sink holds. The Blob fallback sink holds the whole output in browser Blob storage; Firefox 156 and WebKit 26.6 handled 900 MB in testing, while headless Chrome for Testing's download path failed between 300 MB and 600 MB (real Chrome takes the streaming sink, so this only shows up in `tests/e2e.mjs --sink blob`). The streaming sink has no such limit.
 - `showSaveFilePicker` must be called while the click is still a fresh user gesture, so `openSink()` runs before key derivation. On a non-abort error from the picker the UI silently falls back to the Blob sink.
 - On failure the UI calls `sink.abort()`. For the streaming sink that discards the partially written file, since `FileSystemWritableFileStream` only commits on `close()`.
 - `PBKDF2_ITERATIONS = 600_000` matches OWASP guidance. The count is stored in the header, so it can be raised for new files without breaking old ones.
