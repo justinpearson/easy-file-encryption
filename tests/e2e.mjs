@@ -70,6 +70,7 @@ const page = await context.newPage();
 const result = { browser: browserName, version: browser ? browser.version() : 'persistent', sink: sinkKind, sizeMB, crashes: 0, pageErrors: [] };
 page.on('crash', () => { result.crashes++; });
 page.on('pageerror', (e) => { result.pageErrors.push(String(e)); });
+page.on('console', (m) => { if (m.type() === 'error') result.pageErrors.push('console: ' + m.text()); });
 
 // Route the page's output to disk according to the sink under test.
 const streamed = {};
@@ -138,7 +139,8 @@ try {
 	result.ok = result.bytesMatch
 		&& result.decrypt.name === path.basename(input)
 		&& result.wrongPassword.status.startsWith('Wrong password')
-		&& result.crashes === 0;
+		&& result.crashes === 0
+		&& result.pageErrors.length === 0;
 } catch (e) {
 	result.ok = false;
 	result.error = String(e);

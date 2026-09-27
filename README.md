@@ -6,7 +6,7 @@ Crypto: AES-256-GCM with a key derived via PBKDF2-SHA256 (600,000 iterations, pe
 
 ## Usage
 
-Open `easy-file-encryption.html` in a browser and pick a file. The button reads **Encrypt** for an ordinary file and **Decrypt** for a `.enc` file the tool produced.
+Open `easy-file-encryption.html` in a browser, or use the hosted copy at **https://justinpearson.github.io/easy-file-encryption/**, and pick a file. Either way the file is read and written on your own computer: the page makes no network requests after it loads, and a Content-Security-Policy in the page forbids the browser from sending anything anywhere. The button reads **Encrypt** for an ordinary file and **Decrypt** for a `.enc` file the tool produced.
 
 ![Encrypt — file chosen, ready to encrypt](images/encrypt.png)
 
@@ -27,7 +27,7 @@ Mobile browsers are not supported: the download step fails on iOS Safari.
 
 ## Caveats
 
-The recipient is trusting whoever sent the HTML page that the decryption code hasn't been tampered with. If that matters to you, diff the page against this repo's copy before running it.
+The recipient is trusting whoever sent the HTML page, or whoever controls this repository if they use the hosted copy, that the decryption code hasn't been tampered with. If that matters to you, diff the page against this repo's copy before running it. The Content-Security-Policy makes any network send fail loudly, but a tampered page could remove that tag, so it guards against mistakes rather than a hostile maintainer.
 
 Email providers may block or strip `.html` and `.enc` attachments. Send them via a link-share service, a chat app, or a USB stick instead.
 

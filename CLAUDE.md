@@ -10,6 +10,8 @@ A single static HTML file, `easy-file-encryption.html`, that encrypts or decrypt
 
 Open `easy-file-encryption.html` directly in a browser (e.g. `open easy-file-encryption.html` on macOS). All crypto runs client-side via `window.crypto.subtle`, which requires either `file://`, `localhost`, or HTTPS.
 
+The repo is also served by GitHub Pages from the `main` branch root at https://justinpearson.github.io/easy-file-encryption/. `index.html` is only a meta-refresh redirect to `easy-file-encryption.html`, and `.nojekyll` skips the Jekyll build. Pushing to `main` deploys.
+
 Unit tests for the crypto core run under Node (v20+) with nothing installed:
 
 ```
@@ -50,5 +52,6 @@ Any change to the header layout, nonce derivation or AAD must bump the magic to 
 - `showSaveFilePicker` must be called while the click is still a fresh user gesture, so `openSink()` runs before key derivation. On a non-abort error from the picker the UI silently falls back to the Blob sink.
 - On failure the UI calls `sink.abort()`. For the streaming sink that discards the partially written file, since `FileSystemWritableFileStream` only commits on `close()`.
 - `PBKDF2_ITERATIONS = 600_000` matches OWASP guidance. The count is stored in the header, so it can be raised for new files without breaking old ones.
+- The `Content-Security-Policy` meta tag forbids every network send (`default-src 'none'; connect-src 'none'; form-action 'none'`) so the browser enforces that files and passwords stay local. Inline scripts and styles are allowed because the page is a single file. `tests/e2e.mjs` fails on any console error, which is how a CSP violation would surface.
 - `MIN_PASSWORD_LENGTH = 5` is a UI sanity check, not a security policy.
 - Base64 was removed from the design entirely; the old data-URL trick capped files at V8's maximum string length (about 300 MB of input) and failed silently past it.
