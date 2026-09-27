@@ -166,3 +166,12 @@ test('default options use 8 MiB chunks and 600k PBKDF2 iterations', async () => 
 	assert.equal(header.chunkBytes, 8 * 1024 * 1024);
 	assert.equal(header.iterations, 1000);
 });
+
+test('an input without a valid size is rejected instead of producing a header-only file', async () => {
+	const sink = memorySink();
+	await assert.rejects(
+		EFE.encrypt({ name: 'x', slice: () => new Blob([]) }, PASSWORD, sink, OPTS),
+		(e) => e.code === 'bad-input',
+	);
+	assert.equal(sink.parts.length, 0);
+});

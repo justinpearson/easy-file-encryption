@@ -12,15 +12,19 @@ Open `easy-file-encryption.html` directly in a browser (e.g. `open easy-file-enc
 
 The repo is also served by GitHub Pages from the `main` branch root at https://justinpearson.github.io/easy-file-encryption/. `index.html` is only a meta-refresh redirect to `easy-file-encryption.html`, and `.nojekyll` skips the Jekyll build. Pushing to `main` deploys.
 
-Unit tests for the crypto core run under Node (v20+) with nothing installed:
+Unit tests for the crypto core and the command-line tool run under Node (v20+) with nothing installed:
 
 ```
-node --test tests/core.test.mjs
+node --test tests/core.test.mjs tests/cli.test.mjs
 ```
 
 Note that `node --test tests/` (a bare directory) does not work on current Node; pass the file or a glob.
 
 `tests/e2e.mjs` round-trips a file of any size through the page in a real browser and checks the bytes. It needs a Playwright package on disk, located via `PLAYWRIGHT_DIR`; the header comment explains the flags. Use it after any change to the UI script or the sink logic, since the unit tests do not cover those.
+
+## Command-line tools
+
+`tools/efe-cli.mjs` lifts the same `<script id="core">` block out of the HTML at startup (the same regex the tests use) and drives it with a file-backed Blob from `fs.openAsBlob`, so it never loads the input into memory and produces byte-compatible `.enc` files. `tools/encrypt-folders.zsh` batches it over the subfolders of a directory with zip, hash and decrypt-back verification at each step. Tests: `node --test tests/cli.test.mjs`. Changing the core's exported API (`encrypt`, `decrypt`, `parseHeader`, `isEncrypted`) or the `id="core"` marker breaks both tools.
 
 ## Architecture: two scripts in one file
 

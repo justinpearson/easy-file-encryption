@@ -33,6 +33,21 @@ Email providers may block or strip `.html` and `.enc` attachments. Send them via
 
 Files produced by the previous version of this tool (self-decrypting `.html` pages, format `ENC1`) still decrypt on their own; this version does not read them.
 
+## Command line
+
+The same crypto core runs outside the browser, so archives made by script open in the page and the other way round. Both tools need only Node 20 or newer.
+
+`tools/efe-cli.mjs` encrypts or decrypts one file:
+
+```
+node tools/efe-cli.mjs encrypt photos.zip photos.zip.enc
+node tools/efe-cli.mjs decrypt photos.zip.enc photos.zip
+```
+
+It prompts for the password without echo, or reads it from the first line of stdin with `--password-stdin`. Output is written to a `.part` file and renamed into place only on success, and an existing output is never overwritten without `--force`.
+
+`tools/encrypt-folders.zsh SRC OUT` zips each immediate subfolder of `SRC` into `OUT/<name>.zip.enc`, all under one password. Every step is checked: the zip is tested and each file inside it is hashed against the source, then the `.enc` is decrypted again and byte-compared with the zip before the plaintext zip is deleted (`--keep-zips` keeps it). Nothing is ever written inside `SRC`. Folders whose `.enc` already exists are skipped unless `--force` is given, so an interrupted run can be resumed. `OUT/MANIFEST.txt` lists every archive with its size and SHA-256. `--password-file FILE` reads the password from a file for unattended runs.
+
 ## Tests
 
 The crypto core has no DOM dependencies and runs under Node's built-in WebCrypto, so the unit tests need nothing installed:
@@ -41,4 +56,4 @@ The crypto core has no DOM dependencies and runs under Node's built-in WebCrypto
 node --test tests/core.test.mjs
 ```
 
-`tests/e2e.mjs` drives the page in a real browser and round-trips a file of any size. It needs a Playwright install somewhere on disk; see the header comment in that file.
+`tests/cli.test.mjs` covers the command-line tool the same way. `tests/e2e.mjs` drives the page in a real browser and round-trips a file of any size. It needs a Playwright install somewhere on disk; see the header comment in that file.

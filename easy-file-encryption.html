@@ -317,6 +317,7 @@
 					const chunkBytes = opts.chunkBytes || DEFAULT_CHUNK_BYTES;
 					const iterations = opts.iterations || DEFAULT_PBKDF2_ITERATIONS;
 					const onProgress = opts.onProgress || (() => {});
+					if (!Number.isSafeInteger(file.size) || file.size < 0) throw fail('bad-input', 'The input has no valid size.');
 					const nameBytes = new TextEncoder().encode(file.name || '');
 					if (nameBytes.length > MAX_FILENAME_BYTES) throw fail('bad-input', 'The filename is too long.');
 
