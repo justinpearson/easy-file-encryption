@@ -121,7 +121,7 @@ done
 
 # Manifest of everything now in OUT.
 {
-	print -r -- "Encrypted archives in $out"
+	print -r -- "Encrypted archives: ${out:t}"
 	print -r -- "Generated $(date '+%Y-%m-%d %H:%M:%S'). Open with https://justinpearson.github.io/easy-file-encryption/"
 	print -r -- ""
 	for e in "$out"/*.enc(N); do
