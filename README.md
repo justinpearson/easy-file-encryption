@@ -4,15 +4,27 @@ A single HTML file that encrypts or decrypts a file in your browser. Send the en
 
 Crypto: AES-256-GCM with a key derived via PBKDF2-SHA256 (600,000 iterations, per OWASP guidance). Salt and nonce prefix are randomly generated per file. The file is processed in 8 MiB chunks, each authenticated with its index, so there is no practical size limit and any truncation, reordering or edit of the ciphertext is detected. Everything runs client-side via the Web Crypto API.
 
+## Walkthrough
+
+The tool works on one file at a time, so to encrypt a whole folder, zip it first. On macOS, right-click the folder and choose **Compress**. Each recording below runs about 20 seconds; click one to open it as a video with playback controls. The same two videos are built into the page, under "Watch how to…".
+
+**Encrypting a folder**
+
+[![Screen recording: zip a folder, choose the zip file in the page, type a password, click Encrypt, then Save](images/encrypt-demo.gif)](https://justinpearson.github.io/easy-file-encryption/videos/encrypt.mp4)
+
+**Decrypting a file**
+
+[![Screen recording: choose the .enc file in the page, type the password, click Decrypt, then Save, then unzip the result](images/decrypt-demo.gif)](https://justinpearson.github.io/easy-file-encryption/videos/decrypt.mp4)
+
 ## Usage
 
-Open `easy-file-encryption.html` in a browser, or use the hosted copy at **https://justinpearson.github.io/easy-file-encryption/**, and pick a file. Either way the file is read and written on your own computer: the page makes no network requests after it loads, and a Content-Security-Policy in the page forbids the browser from sending anything anywhere. The button reads **Encrypt** for an ordinary file and **Decrypt** for a `.enc` file the tool produced.
+Open `easy-file-encryption.html` in a browser, or use the hosted copy at **https://justinpearson.github.io/easy-file-encryption/**, and pick a file. Either way the file is read and written on your own computer. The only network request the page can make after it loads is fetching a tutorial video from the site that served it, when you play one; a Content-Security-Policy in the page forbids the browser from sending anything anywhere else. The button reads **Encrypt** for an ordinary file and **Decrypt** for a `.enc` file the tool produced.
 
 ![Encrypt — file chosen, ready to encrypt](images/encrypt.png)
 
 Enter a password and click. On Chrome and Edge a Save dialog appears and the output streams straight to disk. On Firefox and Safari the output is assembled in memory and downloaded.
 
-Send the `.enc` file plus a copy of `easy-file-encryption.html` to the recipient, and tell them the password some other way. They open the page, pick the `.enc` file, and enter the password.
+Send the `.enc` file plus a copy of `easy-file-encryption.html` to the recipient, and tell them the password some other way. They open the page, pick the `.enc` file, and enter the password. The page works on its own, without the `videos/` folder; its "Watch how to…" sections then link to the hosted videos.
 
 ![Decrypt — encrypted file chosen, ready to decrypt](images/decrypt.png)
 
@@ -56,4 +68,4 @@ The crypto core has no DOM dependencies and runs under Node's built-in WebCrypto
 node --test tests/core.test.mjs
 ```
 
-`tests/cli.test.mjs` covers the command-line tool the same way. `tests/e2e.mjs` drives the page in a real browser and round-trips a file of any size. It needs a Playwright install somewhere on disk; see the header comment in that file.
+`tests/cli.test.mjs` covers the command-line tool the same way. `tests/page.test.mjs` checks the page as a static file: that the tutorial videos it points at exist and are small, that the page itself stays under 24 KB, and that the Content-Security-Policy allows same-site media and nothing else. `tests/e2e.mjs` drives the page in a real browser and round-trips a file of any size. It needs a Playwright install somewhere on disk; see the header comment in that file.

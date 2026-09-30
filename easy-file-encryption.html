@@ -2,8 +2,8 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8">
-		<!-- Forbids every kind of network send from this page, so the browser itself enforces that files and passwords stay local. -->
-		<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+		<!-- Forbids every kind of network send from this page, so the browser itself enforces that files and passwords stay local. The one thing the page may fetch is the tutorial videos, from the site that served it (media-src 'self'). -->
+		<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; media-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
 		<title>File Encryption</title>
 		<meta name="viewport" content="width=device-width, initial-scale=1">
 		<style>
@@ -42,6 +42,26 @@
 				color: #5b6470;
 				font-size: 13px;
 				margin-bottom: 24px;
+			}
+
+			.howto{
+				margin: -14px 0 22px;
+				font-size: 13px;
+			}
+
+			.howto summary,
+			.howto a{
+				color: #3b82f6;
+				cursor: pointer;
+			}
+
+			.howto video{
+				display: block;
+				width: 100%;
+				height: auto;
+				margin: 8px 0 12px;
+				border-radius: 6px;
+				background: #3b4a6b;
 			}
 
 			.field{
@@ -186,6 +206,17 @@
 		<main>
 			<h1>File Encryption</h1>
 			<p class="lede">Encrypts or decrypts a file of any size, entirely inside your browser. Choose a file: an encrypted <strong>.enc</strong> file will be decrypted, anything else will be encrypted.</p>
+
+			<div class="howto">
+				<details>
+					<summary>Watch how to encrypt a folder (20 seconds)</summary>
+					<video controls playsinline preload="none" width="1032" height="1026" src="videos/encrypt.mp4" aria-label="Screen recording: zip the folder, choose the zip file on this page, type a password, click Encrypt, then Save."></video>
+				</details>
+				<details>
+					<summary>Watch how to decrypt a file (17 seconds)</summary>
+					<video controls playsinline preload="none" width="1032" height="1026" src="videos/decrypt.mp4" aria-label="Screen recording: choose the .enc file on this page, type the password, click Decrypt, then Save, then unzip the result."></video>
+				</details>
+			</div>
 
 			<label class="field">
 				<span class="label">File</span>
@@ -588,6 +619,27 @@
 				passwordInput.addEventListener('keydown', (e) => {
 					if (e.key === 'Enter' && !actionBtn.disabled) actionBtn.click();
 				});
+
+				// Tutorial videos. Opening a section plays its video and closing it pauses. A copy
+				// of this page that was saved or sent on its own has no videos folder beside it, so
+				// a video that fails to load is replaced with a link to the hosted copy.
+				const HOSTED_URL = 'https://justinpearson.github.io/easy-file-encryption/';
+				for (const details of document.querySelectorAll('.howto details')) {
+					const video = details.querySelector('video');
+					details.addEventListener('toggle', () => {
+						if (!video.isConnected) return;
+						if (details.open) video.play().catch(() => {});
+						else video.pause();
+					});
+					video.addEventListener('error', () => {
+						video.replaceWith(Object.assign(document.createElement('a'), {
+							href: HOSTED_URL + video.getAttribute('src'),
+							target: '_blank',
+							rel: 'noopener',
+							textContent: 'Watch this video on the hosted page',
+						}));
+					});
+				}
 			})();
 		</script>
 	</body>
