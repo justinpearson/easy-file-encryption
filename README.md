@@ -1,20 +1,28 @@
 # easy-file-encryption
 
-A single HTML file that encrypts or decrypts a file in your browser. Send the encrypted `.enc` file and this page to the recipient; they open the page in any desktop browser, pick the `.enc` file, type the password, and get the original file back. No software to install, nothing to host, no accounts.
+Easy safe file encryption in your browser.
 
-Crypto: AES-256-GCM with a key derived via PBKDF2-SHA256 (600,000 iterations, per OWASP guidance). Salt and nonce prefix are randomly generated per file. The file is processed in 8 MiB chunks, each authenticated with its index, so there is no practical size limit and any truncation, reordering or edit of the ciphertext is detected. Everything runs client-side via the Web Crypto API.
+**USE IT HERE: https://justinpearson.github.io/easy-file-encryption/**
 
-## Walkthrough
+## How-To (in 20 seconds)
 
-The tool works on one file at a time, so to encrypt a whole folder, zip it first. On macOS, right-click the folder and choose **Compress**. Each recording below runs about 20 seconds; click one to open it as a video with playback controls. The same two videos are built into the page, under "Watch how to…".
-
-**Encrypting a folder**
+**Encrypt**
 
 [![Screen recording: zip a folder, choose the zip file in the page, type a password, click Encrypt, then Save](images/encrypt-demo.gif)](https://justinpearson.github.io/easy-file-encryption/videos/encrypt.mp4)
 
-**Decrypting a file**
+**Decrypt**
 
 [![Screen recording: choose the .enc file in the page, type the password, click Decrypt, then Save, then unzip the result](images/decrypt-demo.gif)](https://justinpearson.github.io/easy-file-encryption/videos/decrypt.mp4)
+
+**Note:** The tool works on one file at a time, so to encrypt a whole folder, zip it first: On macOS, right-click the folder and choose Compress.
+
+---
+
+## Details
+
+A single HTML file that encrypts or decrypts a file in your browser. Send the encrypted `.enc` file and this page to the recipient; they open the page in any desktop browser, pick the `.enc` file, type the password, and get the original file back. No software to install, nothing to host, no accounts.
+
+Crypto: AES-256-GCM with a key derived via PBKDF2-SHA256 (600,000 iterations, per OWASP guidance). Salt and nonce prefix are randomly generated per file. The file is processed in 8 MiB chunks, each authenticated with its index, so there is no practical size limit and any truncation, reordering or edit of the ciphertext is detected. Everything runs client-side via the Web Crypto API.
 
 ## Usage
 
