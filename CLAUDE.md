@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-A single static HTML file, `easy-file-encryption.html`, that encrypts or decrypts a user-selected file in the browser using the Web Crypto API. Encrypting produces a binary `<name>.enc` file; decrypting one of those restores the original. The same page does both, choosing the mode by sniffing the chosen file's magic bytes. There is no server, no build step, no package manager, and no dependencies.
+A single static HTML file, `easy-file-encryption.html`, that encrypts or decrypts a user-selected file in the browser using the Web Crypto API. Encrypting produces a binary `<name>.enc` file; decrypting one of those restores the original. The same page does both, choosing the mode by sniffing the chosen file's magic bytes. There is no server, no build step, no package manager, and no dependencies. The page works as a single file; the two tutorial videos in `videos/` are optional extras that it loads only when a viewer opens a "Watch how to…" section.
 
 ## Running and testing
 
@@ -15,8 +15,10 @@ The repo is also served by GitHub Pages from the `main` branch root at https://j
 Unit tests for the crypto core and the command-line tool run under Node (v20+) with nothing installed:
 
 ```
-node --test tests/core.test.mjs tests/cli.test.mjs
+node --test tests/core.test.mjs tests/cli.test.mjs tests/page.test.mjs
 ```
+
+`tests/page.test.mjs` is a static check of the page: the `<video>` sources exist, are MP4 files under 1 MB with no audio track, and are not preloaded; the page stays under 24 KB; the Content-Security-Policy matches the expected directives exactly; and every relative file the README points at exists.
 
 Note that `node --test tests/` (a bare directory) does not work on current Node; pass the file or a glob.
 
@@ -56,6 +58,7 @@ Any change to the header layout, nonce derivation or AAD must bump the magic to 
 - `showSaveFilePicker` must be called while the click is still a fresh user gesture, so `openSink()` runs before key derivation. On a non-abort error from the picker the UI silently falls back to the Blob sink.
 - On failure the UI calls `sink.abort()`. For the streaming sink that discards the partially written file, since `FileSystemWritableFileStream` only commits on `close()`.
 - `PBKDF2_ITERATIONS = 600_000` matches OWASP guidance. The count is stored in the header, so it can be raised for new files without breaking old ones.
-- The `Content-Security-Policy` meta tag forbids every network send (`default-src 'none'; connect-src 'none'; form-action 'none'`) so the browser enforces that files and passwords stay local. Inline scripts and styles are allowed because the page is a single file. `tests/e2e.mjs` fails on any console error, which is how a CSP violation would surface.
+- The `Content-Security-Policy` meta tag forbids every network send (`default-src 'none'; connect-src 'none'; form-action 'none'`) so the browser enforces that files and passwords stay local. The single exception is `media-src 'self'`, which lets the tutorial videos load from the site that served the page. Inline scripts and styles are allowed because the page is a single file. `tests/e2e.mjs` fails on any console error, which is how a CSP violation would surface.
 - `MIN_PASSWORD_LENGTH = 5` is a UI sanity check, not a security policy.
+- The tutorial videos (`videos/encrypt.mp4`, `videos/decrypt.mp4`) use `preload="none"`, so nothing is fetched until a viewer opens a section, and the UI script plays a video when its `<details>` opens. A copy of the page without the `videos/` folder beside it (an emailed copy, for instance) gets an `error` event on the video and swaps in a link to the hosted file. The README shows the same recordings as GIFs (`images/*-demo.gif`) because GitHub strips `<video>` tags that point at repository files. The recordings were made with the `screen-recording-demo` Claude Code skill; regenerate the MP4 and GIF together so they stay in step.
 - Base64 was removed from the design entirely; the old data-URL trick capped files at V8's maximum string length (about 300 MB of input) and failed silently past it.
