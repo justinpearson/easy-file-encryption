@@ -8,13 +8,16 @@ Easy safe file encryption in your browser.
 
 **Encrypt**
 
+*Note:* The tool works on one file at a time, so to encrypt a whole folder, zip it first: On macOS, right-click the folder and choose Compress.
+
 [![Screen recording: zip a folder, choose the zip file in the page, type a password, click Encrypt, then Save](images/encrypt-demo.gif)](https://justinpearson.github.io/easy-file-encryption/videos/encrypt.mp4)
 
 **Decrypt**
 
 [![Screen recording: choose the .enc file in the page, type the password, click Decrypt, then Save, then unzip the result](images/decrypt-demo.gif)](https://justinpearson.github.io/easy-file-encryption/videos/decrypt.mp4)
 
-**Note:** The tool works on one file at a time, so to encrypt a whole folder, zip it first: On macOS, right-click the folder and choose Compress.
+
+**It's safe:** Your files & password do not leave your machine; the app is browser-based simply because everyone has a browser and Github makes it easy to host. You can download the easy-file-encryption.html and run it yourself if you want that additional privacy.
 
 ---
 
